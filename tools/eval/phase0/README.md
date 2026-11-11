@@ -22,6 +22,7 @@
 | `remeasure.py` | 6.3の確定した定義(B')での測り直し |
 | `remeasure_private.py` | サブドメイン(ホスト単位)とprivateサフィックス上のラベルの測定(元は別のセッションのレビューで作成。見出しを整理し、ホスト単位の集計を追加) |
 | `randomcheck.py` | **ランダム文字列の判定の参照実装**(Goの実装と一致させる) |
+| `string_score.py` | 文字列だけで付く点数(通信なしで評価できるルール)の、悪性と正常の比較(2026年11月11日に追加。結果は`docs/research/string-score.md`と`results/string_score.txt`)。引数は、このフォルダとデータのフォルダの2つ。ブランドリストなどは測定用の仮のもの |
 | `check_age.sh` | 登録からの日数の測定(手元で実行。RDAPに接続できる環境が必要) |
 | `check_cert.sh` | 証明書の発行時期の測定(手元で実行。crt.shに接続できる環境が必要) |
 | `sample_domains.csv` | 9月分から抽出した40ドメイン |
@@ -34,6 +35,7 @@ python3 -I analyze2.py phish/repo phish/psl.dat 202607,202608,202609 "$PWD"
 python3 -I compare.py "$PWD"
 python3 -I remeasure.py "$PWD"
 python3 -I remeasure_private.py "$PWD"
+python3 -I string_score.py "$PWD" "$PWD" > results/string_score.txt   # 約3分半
 bash check_age.sh sample_domains.csv > results/age_result.csv
 bash check_cert.sh results/age_result.csv > results/cert_result.csv
 ```
