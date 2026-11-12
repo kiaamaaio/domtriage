@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Claude Code の PreToolUse hook(.claude/settings.json)から呼ばれる。
+# 検査そのものは git の pre-commit hook(.githooks/pre-commit)が行う。ここでは、Claude が Bash で git commit を
+# 実行する前に、次のことを行う(stderr と確認の理由は Claude やユーザーに返る)。
+#   - pre-commit hook が有効でなければ、または `-n` で飛ばすなら、終了コード 2 でコミットを止める
+#   - 人が確かめるべき変更を含むなら、ユーザーに確認を求める(permissionDecision: ask)
+# あわせて、すべてのコマンドについて、core.hooksPath の変更を終了コード 2 で止める。
+# 標準入力は hook の入力(JSON)。これらのどれでもないコマンドは何もせず通す。
+set -uo pipefail
+
+input="$(cat)"
+
+# pre-commit hook を飛ばす書き方を止める。読み取りと、手順どおりの .githooks への設定は通す。git の設定名は大文字・小文字を区別しない
+if grep -Eiq 'git[^;&|]*[[:space:]]-c[[:space:]]+[^[:space:]]*core\.hookspath=|git[^;&|]*[[:space:]]config[[:space:]][^;&|]*core\.hookspath' <<<"$input" &&
+  ! grep -Eiq 'git config (--get )?core\.hookspath([[:space:]]+\.githooks)?[[:space:]]*(\\|"|[;&|]|$)' <<<"$input"; then
+  printf 'core.hooksPath は変えません。pre-commit hook の検査を飛ばすことになります(CLAUDE.md)。\n' >&2
+  exit 2
+fi
+
+# JSON を解析せず、コマンド文字列に「git [オプション] commit」の形があるかだけを見る。
+# 取りこぼしても、検査は pre-commit hook が行う。JSON の中の改行は \n の 2 文字なので、git の直前の文字として認める
+opt_value='(\\"[^"]*\\"|'"'"'[^'"'"']*'"'"'|[^-[:space:]][^[:space:]]*)'
+git_commit='(^|[^[:alnum:]_-]|\\[nrt])git([[:space:]]+-[^[:space:]]*([[:space:]]+'"$opt_value"')?)*[[:space:]]+commit'
+if ! grep -Eq "$git_commit"'([[:space:]]|\\|"|$)' <<<"$input"; then
+  exit 0
+fi
+
+# 権限のルールでは、結合した短いオプション(-an)を書き切れないので、ここで止める。値を取る -m などのあとの n は除く。
+# コミットメッセージの中の -n を拾わないよう、heredoc の本文(<<'EOF' から EOF の行まで)と、
+# 引用符で囲まれた部分(JSON の中では \"…\" と '…')を除いてから見る。JSON の中の改行は \n の 2 文字
+unquoted="$(perl -pe 's/<<-?[[:space:]]*(?:\\"|'"'"')?(\w+)(?:\\"|'"'"')?.*?\\n\1(?=\\n|"|$)//g; s/\\"(?:[^\\]|\\[^"])*\\"//g; s/'"'"'[^'"'"']*'"'"'//g' <<<"$input")"
+if grep -Eq "$git_commit"'[[:space:]]([^;&|]*[[:space:]])?(-[aeiopqsvz]*n[[:alpha:]]*|--no-verify)([[:space:]]|\\|"|$)' <<<"$unquoted"; then
+  printf 'コミットを中止しました: -n・--no-verify で pre-commit hook を飛ばすことはできません(CLAUDE.md)。\n' >&2
+  exit 2
+fi
+
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo" || exit 2
+
+if [ "$(git config core.hooksPath)" != ".githooks" ]; then
+  printf 'コミットを中止しました: git の pre-commit hook が有効ではありません。\n次を実行してください: git config core.hooksPath .githooks\n' >&2
+  exit 2
+fi
+
+reasons=()
+
+# 同じコマンドの git add は、この時点では実行されていないので、ステージしていない変更も含めて見る
+mapfile -t untracked < <(git -c core.quotePath=false ls-files --others --exclude-standard)
+mapfile -t changed < <(
+  {
+    git -c core.quotePath=false diff --name-only HEAD
+    printf '%s\n' "${untracked[@]}"
+  } | sort -u
+)
+
+for f in "${changed[@]}"; do
+  case "$f" in
+    */testdata/golden/* | testdata/golden/*) reasons+=("ゴールデンの変更: $f") ;;
+    tools/eval/phase0/randomcheck.py) reasons+=("ランダム文字列の判定の基準の変更: $f") ;;
+    go.mod | CLAUDE.md | PLAN.md | docs/phases.md | docs/decisions.md | docs/research/phase0.md | .claude/* | .githooks/*) reasons+=("確認する資料・設定の変更: $f") ;;
+    scripts/claude-commit-check | scripts/allowed-modules) reasons+=("検査に関わるスクリプトの変更: $f") ;;
+  esac
+done
+
+test_diff="$(git diff HEAD -- '*_test.go')"
+if grep -Eq '^\+.*\bt\.Skip' <<<"$test_diff"; then
+  reasons+=("テストの t.Skip の追加")
+fi
+if grep -Eq '^-[[:space:]]*func (Test|Fuzz)' <<<"$test_diff"; then
+  reasons+=("テストの関数の削除")
+fi
+if grep -Eq '^-.*\bf\.Add\(' <<<"$test_diff"; then
+  reasons+=("ファズテストのシードの削除")
+fi
+for f in "${untracked[@]}"; do
+  case "$f" in
+    *_test.go)
+      if grep -Eq '\bt\.Skip' "$f"; then
+        reasons+=("テストの t.Skip の追加: $f")
+      fi
+      ;;
+  esac
+done
+
+if [ "${#reasons[@]}" -gt 0 ]; then
+  # JSON の文字列を壊さないよう、ファイル名の中の " と \ を取り除く
+  reason="$(printf '%s、' "${reasons[@]}" | tr -d '"\\')"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"%s"}}\n' "${reason%、}"
+fi
+
+exit 0

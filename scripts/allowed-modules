@@ -1,0 +1,4 @@
+# go.mod の require に書いてよいモジュール(1 行に 1 つ)。.githooks/pre-commit が確かめる。
+# PLAN.md 4.1 の方針。足すときは、追加する前に相談する(CLAUDE.md)。
+golang.org/x/net
+golang.org/x/text

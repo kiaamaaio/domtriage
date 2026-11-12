@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# git がコミットの前に実行する hook(有効にする手順は CLAUDE.md の「コミット」)。
+# 許可されていない依存、gofmt、test、vet(Linux・Windows)を確かめ、どれかが失敗したら終了コード 1 でコミットを止める。
+# 確かめるのはコミットされる内容(インデックス)で、一時ディレクトリに書き出したものを検査する。
+# go.mod がまだない(実装前の)コミットでは、Go の検査を飛ばす。
+# 人の判断でコミットするときは git commit --no-verify で飛ばせる。
+set -uo pipefail
+
+repo="$(git rev-parse --show-toplevel)"
+cd "$repo" || exit 1
+
+src="$(mktemp -d)" || exit 1
+trap 'rm -rf "$src"' EXIT
+if ! git checkout-index -a --prefix="$src/"; then
+  printf 'コミットを中止しました: コミットされる内容を書き出せません。\n' >&2
+  exit 1
+fi
+
+if [ ! -f "$src/go.mod" ]; then
+  exit 0
+fi
+
+mapfile -t modules < <(awk '/^require \(/ { block = 1; next } block && /^\)/ { block = 0; next } block && NF && $1 !~ /^\/\// { print $1 } /^require [^(]/ { print $2 }' "$src/go.mod")
+for m in "${modules[@]}"; do
+  if ! grep -v '^#' "$src/scripts/allowed-modules" | grep -Fxq -- "$m"; then
+    printf 'コミットを中止しました: 許可されていない依存です: %s\n実装を止めて、ユーザーに相談してください(CLAUDE.md、PLAN.md 4.1)。\n' "$m" >&2
+    exit 1
+  fi
+done
+
+if ! command -v go >/dev/null 2>&1; then
+  printf 'コミットを中止しました: go が見つからず、検査を実行できません。\n' >&2
+  exit 1
+fi
+
+# gofmt -l は、未整形のファイルがあっても終了コード 0 で終えるので、出力でも判定する
+if ! out="$(cd "$src" && gofmt -l . 2>&1)" || [ -n "$out" ]; then
+  printf 'コミットを中止しました: gofmt が通りません。\n%s\n' "$out" >&2
+  exit 1
+fi
+
+if ! out="$(go test -C "$src" ./... 2>&1)"; then
+  printf 'コミットを中止しました: go test ./... が失敗しました。\n%s\n' "$out" >&2
+  exit 1
+fi
+
+if ! out="$(go vet -C "$src" ./... 2>&1)"; then
+  printf 'コミットを中止しました: go vet ./... が失敗しました。\n%s\n' "$out" >&2
+  exit 1
+fi
+
+if ! out="$(GOOS=windows GOARCH=amd64 go vet -C "$src" ./... 2>&1)"; then
+  printf 'コミットを中止しました: Windows 向けの vet が失敗しました。\n%s\n' "$out" >&2
+  exit 1
+fi
+
+exit 0
