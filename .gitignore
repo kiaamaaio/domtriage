@@ -1,2 +1,6 @@
 __pycache__/
 .claude/settings.local.json
+
+# フェーズ0の測定に使う第三者のデータ(tools/eval/phase0/README.md「データの入手」)
+tools/eval/phase0/phish/
+tools/eval/phase0/crux/

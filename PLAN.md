@@ -1054,6 +1054,13 @@ domtriage/
 │   │   └── string-score.md # 文字列だけで付く点数の測定の結果
 │   ├── output-schema.md
 │   └── evaluation.md # 検証結果と調整の記録(フェーズ5で作成)
+├── scripts/
+│   ├── allowed-modules     # 許可する依存(4.1)。pre-commit hookが参照する
+│   └── claude-commit-check # Claude Codeのhookから呼ぶコミット前の確認
+├── .githooks/
+│   └── pre-commit    # gofmt、test、vet、依存の確認
+├── .claude/
+│   └── settings.json # Claude Codeの権限とhook
 ├── CLAUDE.md         # 実装中に常に守るルール
 ├── PLAN.md           # 仕様
 ├── README.md         # 英語
